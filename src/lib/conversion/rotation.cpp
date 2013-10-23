@@ -1,6 +1,6 @@
 /****************************************************************************
  *
- *   Copyright (c) 2013 PX4 Development Team. All rights reserved.
+ *   Copyright (C) 2013 PX4 Development Team. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,21 +32,31 @@
  ****************************************************************************/
 
 /**
- * @file rc_check.h
+ * @file rotation.cpp
  *
- * RC calibration check
+ * Vector rotation library
  */
 
-#pragma once
+#include "math.h"
+#include "rotation.h"
 
- __BEGIN_DECLS
+__EXPORT void
+get_rot_matrix(enum Rotation rot, math::Matrix *rot_matrix)
+{
+	/* first set to zero */
+	rot_matrix->Matrix::zero(3, 3);
 
-/**
- * Check the RC calibration
- *
- * @return			0 / OK if RC calibration is ok, index + 1 of the first
- *				channel that failed else (so 1 == first channel failed)
- */
-__EXPORT int	rc_calibration_check(int mavlink_fd);
+	float roll  = M_DEG_TO_RAD_F * (float)rot_lookup[rot].roll;
+	float pitch = M_DEG_TO_RAD_F * (float)rot_lookup[rot].pitch;
+	float yaw   = M_DEG_TO_RAD_F * (float)rot_lookup[rot].yaw;
 
-__END_DECLS
+	math::EulerAngles euler(roll, pitch, yaw);
+
+	math::Dcm R(euler);
+
+	for (int i = 0; i < 3; i++) {
+		for (int j = 0; j < 3; j++) {
+			(*rot_matrix)(i, j) = R(i, j);
+		}
+	}
+}

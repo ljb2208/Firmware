@@ -1,6 +1,7 @@
 /****************************************************************************
  *
  *   Copyright (c) 2013 PX4 Development Team. All rights reserved.
+ *   Author: Anton Babushkin <anton.babushkin@me.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,21 +33,30 @@
  ****************************************************************************/
 
 /**
- * @file rc_check.h
+ * @file sdlog2_version.h
  *
- * RC calibration check
+ * Tools for system version detection.
+ *
+ * @author Anton Babushkin <anton.babushkin@me.com>
  */
 
-#pragma once
+#ifndef SDLOG2_VERSION_H_
+#define SDLOG2_VERSION_H_
 
- __BEGIN_DECLS
-
-/**
- * Check the RC calibration
- *
- * @return			0 / OK if RC calibration is ok, index + 1 of the first
- *				channel that failed else (so 1 == first channel failed)
+/*
+ GIT_VERSION is defined at build time via a Makefile call to the
+ git command line.
  */
-__EXPORT int	rc_calibration_check(int mavlink_fd);
+#define FREEZE_STR(s) #s
+#define STRINGIFY(s) FREEZE_STR(s)
+#define FW_GIT STRINGIFY(GIT_VERSION)
 
-__END_DECLS
+#ifdef CONFIG_ARCH_BOARD_PX4FMU_V1
+#define	HW_ARCH "PX4FMU_V1"
+#endif
+
+#ifdef CONFIG_ARCH_BOARD_PX4FMU_V2
+#define	HW_ARCH "PX4FMU_V2"
+#endif
+
+#endif /* SDLOG2_VERSION_H_ */

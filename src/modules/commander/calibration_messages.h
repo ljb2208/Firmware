@@ -1,6 +1,7 @@
 /****************************************************************************
  *
- *   Copyright (c) 2013 PX4 Development Team. All rights reserved.
+ *   Copyright (C) 2013 PX4 Development Team. All rights reserved.
+ *   Author: Anton Babushkin <anton.babushkin@me.com>
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -32,21 +33,25 @@
  ****************************************************************************/
 
 /**
- * @file rc_check.h
+ * @file calibration_messages.h
  *
- * RC calibration check
+ * Common calibration messages.
+ *
+ * @author Anton Babushkin <anton.babushkin@me.com>
  */
 
-#pragma once
+#ifndef CALIBRATION_MESSAGES_H_
+#define CALIBRATION_MESSAGES_H_
 
- __BEGIN_DECLS
+#define CAL_STARTED_MSG	"%s calibration: started"
+#define CAL_DONE_MSG	"%s calibration: done"
+#define CAL_FAILED_MSG	"%s calibration: failed"
+#define CAL_PROGRESS_MSG	"%s calibration: progress <%u>"
 
-/**
- * Check the RC calibration
- *
- * @return			0 / OK if RC calibration is ok, index + 1 of the first
- *				channel that failed else (so 1 == first channel failed)
- */
-__EXPORT int	rc_calibration_check(int mavlink_fd);
+#define CAL_FAILED_SENSOR_MSG	"ERROR: failed reading sensor"
+#define CAL_FAILED_RESET_CAL_MSG	"ERROR: failed to reset calibration"
+#define CAL_FAILED_APPLY_CAL_MSG	"ERROR: failed to apply calibration"
+#define CAL_FAILED_SET_PARAMS_MSG	"ERROR: failed to set parameters"
+#define CAL_FAILED_SAVE_PARAMS_MSG	"ERROR: failed to save parameters"
 
-__END_DECLS
+#endif /* CALIBRATION_MESSAGES_H_ */
