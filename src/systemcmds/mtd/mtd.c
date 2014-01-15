@@ -62,50 +62,84 @@
 #include "systemlib/param/param.h"
 #include "systemlib/err.h"
 
+#include <board_config.h>
+
 __EXPORT int mtd_main(int argc, char *argv[]);
 
-#ifndef CONFIG_MTD_RAMTRON
+#ifndef CONFIG_MTD
 
-/* create a fake command with decent message to not confuse users */
+/* create a fake command with decent warnx to not confuse users */
 int mtd_main(int argc, char *argv[])
 {
-	errx(1, "RAMTRON not enabled, skipping.");
+	errx(1, "MTD not enabled, skipping.");
 }
 
 #else
 
-static void	mtd_attach(void);
-static void	mtd_start(void);
-static void	mtd_erase(void);
-static void	mtd_ioctl(unsigned operation);
-static void	mtd_save(const char *name);
-static void	mtd_load(const char *name);
+#ifdef CONFIG_MTD_RAMTRON
+static void	ramtron_attach(void);
+#else
+
+#ifndef PX4_I2C_BUS_ONBOARD
+#  error PX4_I2C_BUS_ONBOARD not defined, cannot locate onboard EEPROM
+#endif
+
+static void	at24xxx_attach(void);
+#endif
+static void	mtd_start(char *partition_names[], unsigned n_partitions);
 static void	mtd_test(void);
+static void	mtd_erase(char *partition_names[], unsigned n_partitions);
+static void	mtd_print_info();
+static int	mtd_get_geometry(unsigned long *blocksize, unsigned long *erasesize, unsigned long *neraseblocks, 
+	unsigned *blkpererase, unsigned *nblocks, unsigned *partsize, unsigned n_partitions);
 
 static bool attached = false;
 static bool started = false;
 static struct mtd_dev_s *mtd_dev;
-static char *_mtdname = "/dev/mtd_params";
-static char *_wpname = "/dev/mtd_waypoints";
+static unsigned n_partitions_current = 0;
+
+/* note, these will be equally sized */
+static char *partition_names_default[] = {"/fs/mtd_params", "/fs/mtd_waypoints"};
+static const int n_partitions_default = sizeof(partition_names_default) / sizeof(partition_names_default[0]);
 
 int mtd_main(int argc, char *argv[])
 {
 	if (argc >= 2) {
-		if (!strcmp(argv[1], "start"))
-			mtd_start();
+		if (!strcmp(argv[1], "start")) {
+
+			/* start mapping according to user request */
+			if (argc >= 3) {
+				mtd_start(argv + 2, argc - 2);
+			} else {
+				mtd_start(partition_names_default, n_partitions_default);
+			}
+		}
 
 		if (!strcmp(argv[1], "test"))
 			mtd_test();
+
+		if (!strcmp(argv[1], "status"))
+			mtd_status();
+
+		if (!strcmp(argv[1], "erase")) {
+			if (argc >= 3) {
+				mtd_erase(argv + 2, argc - 2);
+			} else {
+				mtd_erase(partition_names_default, n_partitions_default);
+			}
+                }
 	}
 
-	errx(1, "expected a command, try 'start' or 'test'");
+	errx(1, "expected a command, try 'start', 'erase' or 'test'");
 }
 
 struct mtd_dev_s *ramtron_initialize(FAR struct spi_dev_s *dev);
+struct mtd_dev_s *mtd_partition(FAR struct mtd_dev_s *mtd,
+                                    off_t firstblock, off_t nblocks);
 
-
+#ifdef CONFIG_MTD_RAMTRON
 static void
-mtd_attach(void)
+ramtron_attach(void)
 {
 	/* find the right spi */
 	struct spi_dev_s *spi = up_spiinitialize(2);
@@ -118,7 +152,7 @@ mtd_attach(void)
 	if (spi == NULL)
 		errx(1, "failed to locate spi bus");
 
-	/* start the MTD driver, attempt 5 times */
+	/* start the RAMTRON driver, attempt 5 times */
 	for (int i = 0; i < 5; i++) {
 		mtd_dev = ramtron_initialize(spi);
 
@@ -138,78 +172,206 @@ mtd_attach(void)
 
 	attached = true;
 }
+#else
 
 static void
-mtd_start(void)
+at24xxx_attach(void)
+{
+	/* find the right I2C */
+	struct i2c_dev_s *i2c = up_i2cinitialize(PX4_I2C_BUS_ONBOARD);
+	/* this resets the I2C bus, set correct bus speed again */
+	I2C_SETFREQUENCY(i2c, 400000);
+
+	if (i2c == NULL)
+		errx(1, "failed to locate I2C bus");
+
+	/* start the MTD driver, attempt 5 times */
+	for (int i = 0; i < 5; i++) {
+		mtd_dev = at24c_initialize(i2c);
+		if (mtd_dev) {
+			/* abort on first valid result */
+			if (i > 0) {
+				warnx("warning: EEPROM needed %d attempts to attach", i+1);
+			}
+			break;
+		}
+	}
+
+	/* if last attempt is still unsuccessful, abort */
+	if (mtd_dev == NULL)
+		errx(1, "failed to initialize EEPROM driver");
+
+	attached = true;
+}
+#endif
+
+static void
+mtd_start(char *partition_names[], unsigned n_partitions)
 {
 	int ret;
 
 	if (started)
 		errx(1, "mtd already mounted");
 
-	if (!attached)
-		mtd_attach();
+	if (!attached) {
+		#ifdef CONFIG_ARCH_BOARD_PX4FMU_V1
+		at24xxx_attach();
+		#else
+		ramtron_attach();
+		#endif
+	}
 
 	if (!mtd_dev) {
-		warnx("ERROR: Failed to create RAMTRON FRAM MTD instance\n");
+		warnx("ERROR: Failed to create RAMTRON FRAM MTD instance");
 		exit(1);
 	}
 
-	/* Initialize to provide an FTL block driver on the MTD FLASH interface.
-	 *
-	 * NOTE:  We could just skip all of this FTL and BCH stuff.  We could
-	 * instead just use the MTD drivers bwrite and bread to perform this
-	 * test.  Creating the character drivers, however, makes this test more
-	 * interesting.
-	 */
+	unsigned long blocksize, erasesize, neraseblocks;
+	unsigned blkpererase, nblocks, partsize;
 
-	ret = ftl_initialize(0, mtd_dev);
-
-	if (ret < 0) {
-		warnx("Creating /dev/mtdblock0 failed: %d\n", ret);
-		exit(2);
-	}
-
-	/* Now create a character device on the block device */
-
-	ret = bchdev_register("/dev/mtdblock0", _mtdname, false);
-
-	if (ret < 0) {
-		warnx("ERROR: bchdev_register %s failed: %d\n", _mtdname, ret);
+	ret = mtd_get_geometry(&blocksize, &erasesize, &neraseblocks, &blkpererase, &nblocks, &partsize, n_partitions);
+	if (ret)
 		exit(3);
+
+	/* Now create MTD FLASH partitions */
+
+	warnx("Creating partitions");
+	FAR struct mtd_dev_s *part[n_partitions];
+	char blockname[32];
+
+	unsigned offset;
+	unsigned i;
+
+	for (offset = 0, i = 0; i < n_partitions; offset += nblocks, i++) {
+
+		warnx("  Partition %d. Block offset=%lu, size=%lu",
+		      i, (unsigned long)offset, (unsigned long)nblocks);
+
+		/* Create the partition */
+
+		part[i] = mtd_partition(mtd_dev, offset, nblocks);
+
+		if (!part[i]) {
+			warnx("ERROR: mtd_partition failed. offset=%lu nblocks=%lu",
+			      (unsigned long)offset, (unsigned long)nblocks);
+			exit(4);
+		}
+
+		/* Initialize to provide an FTL block driver on the MTD FLASH interface */
+
+		snprintf(blockname, sizeof(blockname), "/dev/mtdblock%d", i);
+
+		ret = ftl_initialize(i, part[i]);
+
+		if (ret < 0) {
+			warnx("ERROR: ftl_initialize %s failed: %d", blockname, ret);
+			exit(5);
+		}
+
+		/* Now create a character device on the block device */
+
+		ret = bchdev_register(blockname, partition_names[i], false);
+
+		if (ret < 0) {
+			warnx("ERROR: bchdev_register %s failed: %d", partition_names[i], ret);
+			exit(6);
+		}
 	}
 
-	/* mount the mtd */
-	ret = mount(NULL, "/mtd", "nxffs", 0, NULL);
-
-	if (ret < 0)
-		errx(1, "failed to mount /mtd - erase mtd to reformat");
+	n_partitions_current = n_partitions;
 
 	started = true;
-	warnx("mounted mtd at /mtd");
 	exit(0);
 }
 
-static void
-mtd_ioctl(unsigned operation)
+int mtd_get_geometry(unsigned long *blocksize, unsigned long *erasesize, unsigned long *neraseblocks, 
+	unsigned *blkpererase, unsigned *nblocks, unsigned *partsize, unsigned n_partitions)
 {
-	int fd;
+		/* Get the geometry of the FLASH device */
 
-	fd = open("/mtd/.", 0);
+	FAR struct mtd_geometry_s geo;
 
-	if (fd < 0)
-		err(1, "open /mtd");
+	int ret = mtd_dev->ioctl(mtd_dev, MTDIOC_GEOMETRY, (unsigned long)((uintptr_t)&geo));
 
-	if (ioctl(fd, operation, 0) < 0)
-		err(1, "ioctl");
+	if (ret < 0) {
+		warnx("ERROR: mtd->ioctl failed: %d", ret);
+		return ret;
+	}
 
-	exit(0);
+	*blocksize = geo.blocksize;
+	*erasesize = geo.blocksize;
+	*neraseblocks = geo.neraseblocks;
+
+	/* Determine the size of each partition.  Make each partition an even
+	 * multiple of the erase block size (perhaps not using some space at the
+	 * end of the FLASH).
+	 */
+
+	*blkpererase = geo.erasesize / geo.blocksize;
+	*nblocks     = (geo.neraseblocks / n_partitions) * *blkpererase;
+	*partsize    = *nblocks * geo.blocksize;
+
+	return ret;
 }
 
-static void
+void mtd_print_info()
+{
+	if (!attached)
+		exit(1);
+
+	unsigned long blocksize, erasesize, neraseblocks;
+	unsigned blkpererase, nblocks, partsize;
+
+	int ret = mtd_get_geometry(&blocksize, &erasesize, &neraseblocks, &blkpererase, &nblocks, &partsize, n_partitions_current);
+	if (ret)
+		exit(3);
+
+	warnx("Flash Geometry:");
+
+	printf("  blocksize:      %lu\n", blocksize);
+	printf("  erasesize:      %lu\n", erasesize);
+	printf("  neraseblocks:   %lu\n", neraseblocks);
+	printf("  No. partitions: %u\n", n_partitions_current);
+	printf("  Partition size: %u Blocks (%u bytes)\n", nblocks, partsize);
+	printf("  TOTAL SIZE: %u KiB\n", neraseblocks * erasesize / 1024);
+
+}
+
+void
 mtd_test(void)
 {
-//	at24c_test();
+	warnx("This test routine does not test anything yet!");
+	exit(1);
+}
+
+void
+mtd_status(void)
+{
+	if (!attached)
+		errx(1, "MTD driver not started");
+
+	mtd_print_info();
+	exit(0);
+}
+
+void
+mtd_erase(char *partition_names[], unsigned n_partitions)
+{
+	uint8_t v[64];
+	memset(v, 0xFF, sizeof(v));
+	for (uint8_t i = 0; i < n_partitions; i++) {
+		uint32_t count = 0;
+		printf("Erasing %s\n", partition_names[i]);
+		int fd = open(partition_names[i], O_WRONLY);
+		if (fd == -1) {
+			errx(1, "Failed to open partition");
+		}
+		while (write(fd, &v, sizeof(v)) == sizeof(v)) {
+			count += sizeof(v);
+		}
+		printf("Erased %lu bytes\n", (unsigned long)count);
+		close(fd);
+	}
 	exit(0);
 }
 
