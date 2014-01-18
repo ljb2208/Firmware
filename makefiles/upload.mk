@@ -33,7 +33,8 @@ upload-serial-px4fmu-v2:	$(BUNDLE) $(UPLOADER)
 #
 # JTAG firmware uploading with OpenOCD
 #
-JTAGCONFIG		?= interface/olimex-jtag-tiny.cfg
+#JTAGCONFIG		?= interface/olimex-jtag-tiny.cfg
+JTAGCONFIG		?= /home/lbarnett/development/px4/Firmware/Debug/foss-jtag.cfg
 
 upload-jtag-px4fmu: all
 	@$(ECHO) Attempting to flash PX4FMU board via JTAG
