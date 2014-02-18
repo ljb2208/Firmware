@@ -37,6 +37,7 @@ MODULES		+= drivers/airspeed
 MODULES		+= drivers/ets_airspeed
 MODULES		+= drivers/meas_airspeed
 MODULES		+= drivers/frsky_telemetry
+MODULES		+= drivers/sf02
 MODULES		+= modules/sensors
 
 # Needs to be burned to the ground and re-written; for now,
